@@ -40,7 +40,7 @@ instance Show Expr where
     showsPrec _ (Const b)      = if b then showString "\\text{true}" 
                                  else showString "\\text{false}"
     showsPrec p (Neg e)        = showParenLATEX (p >= 4) (showString "\\neg " . showsPrec 4 e)
-    showsPrec p (Bin op e1 e2) = showParenLATEX (p > prec)
+    showsPrec p (Bin op e1 e2) = showParenLATEX (p >= prec)
                                    (showsPrec prec e1 . showString symb . showsPrec prec e2)
                                  where prec = opPrec op 
                                        symb = opSymb op

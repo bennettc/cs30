@@ -6,7 +6,7 @@ import           CS30.Exercises.Util
 import qualified Data.Map as Map
 import           Data.List
 import           CS30.Exercises.LogicRewriting.Parsing (laws, lawNames, Expr (..), Op (..), Law (..))
-import           CS30.Exercises.LogicRewriting.ProofGeneration (getDerivation, Proof (..), apply)
+import           CS30.Exercises.LogicRewriting.ProofGeneration (getDerivation, Proof (..), apply, Subst, combine)
 
 -- final exercise type
 logicRewritingEx :: ExerciseType
@@ -16,8 +16,8 @@ logicRewritingEx = exerciseType "Logic Rewriting" "L?.?" "Logic Rewriting"
                        logicFeedback
 
 -- generate initial expressions to put through the prover
-initialExpr :: (Int -> ChoiceTree Expr) -> ChoiceTree Expr
-initialExpr expr = neg <$> expr 7
+initialExpr :: ChoiceTree Expr -> ChoiceTree Expr
+initialExpr expr = neg <$> expr
                    where neg (Neg e)   = Neg e
                          neg otherExpr = Neg otherExpr
 
@@ -46,66 +46,56 @@ getSize (Const _)     = 1
 getSize (Neg e)       = 1 + getSize e
 getSize (Bin _ e1 e2) = 1 + getSize e1 + getSize e2
 
--- assigns random expressions of random sizes to the variables
--- the expressions assigned should have sizes that sum to the given "size",
---  thereby constraining the size of the expression overall
-assignRandExprs :: Int -> [Char] -> ChoiceTree [(Char, Expr)]
-assignRandExprs size vars | length vars == 0 = Node []
-                          | otherwise = Branch $ map (mapM genPair) (map (zip vars) exprSizes)
-                          where -- exprSizes gives the possible sizes for substitutions,
-                              -- in order to sum to the desired size
-                              exprSizes = sumLen size (length vars)
-                              -- sumLen returns all lists of positive integers of length l
-                              -- that sum to n
-                              sumLen :: Int -> Int -> [[Int]]
-                              sumLen x 1 = [[x]]
-                              sumLen n l = [num:r | num <- [1..(n-1)], r <- sumLen (n-num) (l-1)]
-                              genPair :: (Char, Int) -> ChoiceTree (Char, Expr)
-                              genPair (c, n) = (exprOfSize n) >>= (\expr -> return (c, expr))
-
--- rewrite an expression in all equivalent ways using different names 
--- for the variables 
-switchVars :: Expr -> ChoiceTree Expr
-switchVars e = do let vars = ['p', 'q', 'r']
-                  subs <- nodes [zip vars (map Var orders) 
-                               | orders <- permutations vars]
-                  return (apply subs e)
-
--- use the laws in reverse to rewrite constants in an expression
--- (e.g. we can rewrite "true" as "p && true" or "q || !q")
-substConst :: Expr -> ChoiceTree Expr
-substConst (Const b)      = do repl <- nodes ([lhs | (Law _ (lhs, rhs)) <- laws,
-                                                    rhs == (Const b)]
-                                              ++ [Const b])
-                               switch <- switchVars repl
-                               return switch
-substConst (Var v)        = return (Var v)
-substConst (Neg e)        = Neg <$> (substConst e)
-substConst (Bin op e1 e2) = Bin op <$> (substConst e1) <*> (substConst e2)
-
--- generate an expression to fit the law given by the expression
---  using s as a constraint on the size
--- 
--- note: if there are duplicate variables in the expression, the generated expressions
---  may be larger than s, but after the first step they should be simplified to 
---  an expression of at most size s 
-forceLaw :: Expr -> Int -> ChoiceTree Expr
-forceLaw e s = do expr <- substConst e
-                  let vars = nub $ getVars expr
-                  let size = s - (getSize expr)
-                  assignments <- assignRandExprs size vars
-                  return (apply assignments expr)
-
 -- get all the laws which have given name
 getLawsByName :: String -> ChoiceTree Law
 getLawsByName name = nodes [(Law nm eq) | (Law nm eq) <- laws, nm == name]
+
+rewriteExprs :: Int -> Expr -> ChoiceTree Expr
+rewriteExprs 0 e = return e
+rewriteExprs s e = do rewrite <- nodes $ concat [rewrites (rhs,lhs) e 
+                                                | (Law _ (lhs,rhs)) <- laws]
+                      rewriteExprs (s-1) rewrite
+
+switchVars :: [Subst]
+switchVars = [zip vars (map Var orders) 
+             | orders <- permutations vars]
+             where vars = ['p', 'r', 'q']
+
+-- TODO: give all alternate for var too (make switchVars func)
+matchExpr :: Expr -> Expr -> [Subst]
+matchExpr (Var v) e = [ [(v,e)] ]
+matchExpr (Const i) (Const j) | i == j = switchVars
+matchExpr (Const _) _ = []
+matchExpr (Neg e1) (Neg e2) = matchExpr e1 e2
+matchExpr (Neg _) _  = []
+matchExpr (Bin op1 e1 e2) (Bin op2 e3 e4)
+    | op1 == op2 = combine (matchExpr e1 e3) (matchExpr e2 e4)
+    | otherwise  = []
+matchExpr (Bin _ _ _) _ = []
+
+-- 
+rewrites :: (Expr,Expr) -> Expr -> [Expr]
+rewrites (lhs, rhs) expr = 
+    case matchExpr lhs expr of
+        []         -> recurse expr
+        (sub:subs) -> [apply s rhs | s <- (sub:subs)]
+    where recurse (Var _)         = []
+          recurse (Const _)       = []
+          recurse (Neg e)         = [Neg e' | e' <- rewrites (lhs,rhs) e]
+          recurse (Bin op e1 e2)  = [Bin op e1' e2 | e1' <- rewrites (lhs, rhs) e1] ++
+                                    [Bin op e1 e2' | e2' <- rewrites (lhs, rhs) e2]
+
+-- 
+forceLaw :: Int -> Expr -> ChoiceTree Expr
+forceLaw steps e = do exprs <- rewriteExprs steps e
+                      return exprs
 
 -- contains all the exercises: the list of Fields is what we display
 -- and the String is the solution (actually just the index of the right choice)
 logicExercises :: [ChoiceTree ([Field], String)]
 logicExercises = [do (Law testName (lhs, rhs)) <- getLawsByName name
-                     e <- exprOfSize 2
-                     let (Proof e' steps) = getDerivation ((Law testName (lhs,rhs)):laws) e
+                     e <- initialExpr (forceLaw 2 lhs)
+                     let (Proof e' steps) = getDerivation ((Law testName (lhs, rhs)):laws) e
                      remStep <- nodes $ findIndices ((== testName) . fst) steps
                      let (stepName, _) = steps!!remStep
                      choices <- (getOrderedSubset (delete stepName lawNames) 2)
