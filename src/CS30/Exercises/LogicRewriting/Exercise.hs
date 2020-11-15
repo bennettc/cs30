@@ -26,9 +26,9 @@ exprOfSize :: Int -> ChoiceTree Expr
 exprOfSize 1 = Branch [nodes (map Const [True,False]), 
                        nodes (map Var ['p','q','r'])]
 exprOfSize 2 = Branch [Neg <$> exprOfSize 1]
-exprOfSize n = Branch ([Bin op <$> exprOfSize i <*> exprOfSize (n-i-1)
+exprOfSize n = Branch [Bin op <$> exprOfSize i <*> exprOfSize (n-i-1)
                        | i <- [1..(n-2)]
-                       , op <- [And, Or, Implies]])
+                       , op <- [And, Or, Implies]]
 
 -- extracts all the variables from an expression
 getVars :: Expr -> [Char]
@@ -41,10 +41,10 @@ getVars (Bin _ e1 e2) = getVars e1 ++ getVars e2
 -- (variables have size 0, because in the case of matching laws, 
 -- they will be replaced by other expressions)
 getSize :: Expr -> Int
-getSize (Var _)         = 0
-getSize (Const _)       = 1
-getSize (Neg e)         = 1 + getSize e
-getSize (Bin _ e1 e2)   = 1 + getSize e1 + getSize e2
+getSize (Var _)       = 0
+getSize (Const _)     = 1
+getSize (Neg e)       = 1 + getSize e
+getSize (Bin _ e1 e2) = 1 + getSize e1 + getSize e2
 
 -- assigns random expressions of random sizes to the variables
 -- the expressions assigned should have sizes that sum to the given "size",
@@ -63,6 +63,26 @@ assignRandExprs size vars | length vars == 0 = Node []
                               genPair :: (Char, Int) -> ChoiceTree (Char, Expr)
                               genPair (c, n) = (exprOfSize n) >>= (\expr -> return (c, expr))
 
+-- rewrite an expression in all equivalent ways using different names 
+-- for the variables 
+switchVars :: Expr -> ChoiceTree Expr
+switchVars e = do let vars = ['p', 'q', 'r']
+                  subs <- nodes [zip vars (map Var orders) 
+                               | orders <- permutations vars]
+                  return (apply subs e)
+
+-- use the laws in reverse to rewrite constants in an expression
+-- (e.g. we can rewrite "true" as "p && true" or "q || !q")
+substConst :: Expr -> ChoiceTree Expr
+substConst (Const b)      = do repl <- nodes ([lhs | (Law _ (lhs, rhs)) <- laws,
+                                                    rhs == (Const b)]
+                                              ++ [Const b])
+                               switch <- switchVars repl
+                               return switch
+substConst (Var v)        = return (Var v)
+substConst (Neg e)        = Neg <$> (substConst e)
+substConst (Bin op e1 e2) = Bin op <$> (substConst e1) <*> (substConst e2)
+
 -- generate an expression to fit the law given by the expression
 --  using s as a constraint on the size
 -- 
@@ -70,10 +90,11 @@ assignRandExprs size vars | length vars == 0 = Node []
 --  may be larger than s, but after the first step they should be simplified to 
 --  an expression of at most size s 
 forceLaw :: Expr -> Int -> ChoiceTree Expr
-forceLaw e s = do let vars = nub $ getVars e
-                  let size = s - (getSize e)
+forceLaw e s = do expr <- substConst e
+                  let vars = nub $ getVars expr
+                  let size = s - (getSize expr)
                   assignments <- assignRandExprs size vars
-                  return (apply assignments e)
+                  return (apply assignments expr)
 
 -- get all the laws which have given name
 getLawsByName :: String -> ChoiceTree Law
@@ -83,7 +104,7 @@ getLawsByName name = nodes [(Law nm eq) | (Law nm eq) <- laws, nm == name]
 -- and the String is the solution (actually just the index of the right choice)
 logicExercises :: [ChoiceTree ([Field], String)]
 logicExercises = [do (Law testName (lhs, rhs)) <- getLawsByName name
-                     e <- initialExpr (forceLaw lhs)
+                     e <- exprOfSize 2
                      let (Proof e' steps) = getDerivation ((Law testName (lhs,rhs)):laws) e
                      remStep <- nodes $ findIndices ((== testName) . fst) steps
                      let (stepName, _) = steps!!remStep
