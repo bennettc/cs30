@@ -6,7 +6,7 @@ import           CS30.Exercises.Util
 import qualified Data.Map as Map
 import           Data.List
 import           CS30.Exercises.LogicRewriting.Parsing (laws, lawNames, Expr (..), Op (..), Law (..))
-import           CS30.Exercises.LogicRewriting.ProofGeneration (getDerivation, Proof (..), apply, Subst, combine)
+import           CS30.Exercises.LogicRewriting.ProofGeneration (getDerivation, Proof (..), Subst, rewrites', matchExpr)
 
 -- final exercise type
 logicRewritingEx :: ExerciseType
@@ -50,45 +50,37 @@ getSize (Bin _ e1 e2) = 1 + getSize e1 + getSize e2
 getLawsByName :: String -> ChoiceTree Law
 getLawsByName name = nodes [(Law nm eq) | (Law nm eq) <- laws, nm == name]
 
+-- gives all possible ways of rewriting expression by applying the laws
+-- in reverse s times
 rewriteExprs :: Int -> Expr -> ChoiceTree Expr
 rewriteExprs 0 e = return e
-rewriteExprs s e = do rewrite <- nodes $ concat [rewrites (rhs,lhs) e 
-                                                | (Law _ (lhs,rhs)) <- laws]
+rewriteExprs s e = do rewrite <- nodes $ concat [rewrites' matchExpr' (rhs,lhs) e 
+                                                | (Law nm (lhs,rhs)) <- laws,
+                                                 nm /= "Double Negation Law"]
+                      -- ^ use all laws except double negation, to avoid expressions
+                      -- with an excess of negations 
                       rewriteExprs (s-1) rewrite
 
+-- a list of substitions which will rewrite only the variable names
+-- and leave the expression otherwise the same
 switchVars :: [Subst]
 switchVars = [zip vars (map Var orders) 
              | orders <- permutations vars]
              where vars = ['p', 'r', 'q']
 
--- TODO: give all alternate for var too (make switchVars func)
-matchExpr :: Expr -> Expr -> [Subst]
-matchExpr (Var v) e = [ [(v,e)] ]
-matchExpr (Const i) (Const j) | i == j = switchVars
-matchExpr (Const _) _ = []
-matchExpr (Neg e1) (Neg e2) = matchExpr e1 e2
-matchExpr (Neg _) _  = []
-matchExpr (Bin op1 e1 e2) (Bin op2 e3 e4)
-    | op1 == op2 = combine (matchExpr e1 e3) (matchExpr e2 e4)
-    | otherwise  = []
-matchExpr (Bin _ _ _) _ = []
-
+-- an alternate matchExpr which can transform constants into expression 
+-- with variables (considering every possible "renaming" of these variables) 
 -- 
-rewrites :: (Expr,Expr) -> Expr -> [Expr]
-rewrites (lhs, rhs) expr = 
-    case matchExpr lhs expr of
-        []         -> recurse expr
-        (sub:subs) -> [apply s rhs | s <- (sub:subs)]
-    where recurse (Var _)         = []
-          recurse (Const _)       = []
-          recurse (Neg e)         = [Neg e' | e' <- rewrites (lhs,rhs) e]
-          recurse (Bin op e1 e2)  = [Bin op e1' e2 | e1' <- rewrites (lhs, rhs) e1] ++
-                                    [Bin op e1 e2' | e2' <- rewrites (lhs, rhs) e2]
+-- TODO: give all alternate for Var too (make switchVars func)
+matchExpr' :: Expr -> Expr -> [Subst]
+matchExpr' (Const i) (Const j) | i == j = switchVars
+matchExpr' e1 e2 = matchExpr e1 e2
 
--- 
+-- gives all expressions which should simplify to the provided 
+-- expression after applying s different laws
 forceLaw :: Int -> Expr -> ChoiceTree Expr
-forceLaw steps e = do exprs <- rewriteExprs steps e
-                      return exprs
+forceLaw s e = do exprs <- rewriteExprs s e
+                  return exprs
 
 -- contains all the exercises: the list of Fields is what we display
 -- and the String is the solution (actually just the index of the right choice)

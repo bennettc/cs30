@@ -21,9 +21,10 @@ manyStep laws e = if null steps then []
 
 -- rewrites gives all the ways of rewriting given expression
 -- using only the provided equation (law)
-rewrites :: Equation -> Expr -> [Expr]
-rewrites (lhs, rhs) expr = 
-    case matchExpr lhs expr of
+-- and using the provided function to match expressions
+rewrites' :: (Expr -> Expr -> [Subst]) -> Equation -> Expr -> [Expr]
+rewrites' matchFunc (lhs, rhs) expr = 
+    case matchFunc lhs expr of
         []         -> recurse expr
         (sub:subs) -> [apply s rhs | s <- (sub:subs)]
     where recurse (Var _)         = []
@@ -31,6 +32,10 @@ rewrites (lhs, rhs) expr =
           recurse (Neg e)         = [Neg e' | e' <- rewrites (lhs,rhs) e]
           recurse (Bin op e1 e2)  = [Bin op e1' e2 | e1' <- rewrites (lhs, rhs) e1] ++
                                     [Bin op e1 e2' | e2' <- rewrites (lhs, rhs) e2]
+
+-- rewrites using the normal matchExpr function
+rewrites :: Equation -> Expr -> [Expr]
+rewrites = rewrites' matchExpr
 
 type Subst = [(Char, Expr)]
 
